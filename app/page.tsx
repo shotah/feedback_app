@@ -18,6 +18,7 @@ export default async function Home() {
           <div className="row topbar-actions">
             <SettingsModal />
             <SignOutButton />
+            <FeedbackModal />
           </div>
         </div>
         <p className="lede">
@@ -31,7 +32,6 @@ export default async function Home() {
           {session?.user ? null : <SignInButtons />}
         </div>
       </main>
-      <FeedbackModal />
     </div>
   );
 }

@@ -372,22 +372,7 @@ h1 {
   color: var(--accent);
 }
 
-.feedback-fab {
-  position: fixed;
-  right: clamp(1rem, 3vw, 1.75rem);
-  bottom: clamp(1rem, 3vw, 1.75rem);
-  z-index: 50;
-  pointer-events: none;
-}
-
-.feedback-fab > * {
-  pointer-events: auto;
-}
-
-.feedback-fab-btn {
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
-  border-radius: 999px;
-  padding: 0.75rem 1.25rem;
+.feedback-header-btn {
   font-weight: 600;
 }
 
