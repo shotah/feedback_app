@@ -1,48 +1,75 @@
 # TODO — feedback_app
 
-## Phase 0 — POC (this repo)
+> **This app builds itself.** You describe what you want, the AI plans it against the actual codebase, you review and approve, and the app applies the change. Every feature below should be submitted as feedback *to this app* and implemented through the same loop it provides. The plane is flying; we're building it in the air.
 
-- [x] vinext + App Router scaffold (`npm run dev` / `build` / `start`)
-- [x] Google OAuth via Auth.js v5
-- [x] MongoDB + Mongoose feedback model (`userId`, `title`, `kind`, `text`, context fields, `status`, `aiOutput`, `source`)
-- [x] `POST/GET /api/feedback` (session + optional Bearer ingest key)
-- [x] `POST /api/feedback/:id/process` (OpenAI JSON + Zod validation + safety-biased system prompt)
-- [x] Docker Compose: `web` + `mongo:7`
-- [x] README + `.env.example`
+## Loop 0 — Bootstrap (done)
 
-**POC “done” when:** `docker compose up --build` works with real Google + OpenAI keys, feedback appears in Mongo, and `aiOutput` is populated after process.
+The minimum to close the first feedback loop manually: sign in, describe what you want, get a structured plan back, copy it to an agent.
 
-## Phase 0 — stretch (still POC)
+- [x] vinext + App Router scaffold, Docker Compose (mongo:7 + web)
+- [x] Google + GitHub OAuth (Auth.js v5)
+- [x] Feedback model (MongoDB/Mongoose): `userId`, `title`, `kind`, `text`, context fields, `status`, `aiOutput`
+- [x] `POST/GET /api/feedback` (session + Bearer ingest), `POST /api/feedback/:id/process`
+- [x] LLM analysis with project-aware system prompt (knows vinext, Mongoose, file layout)
+- [x] Safety-biased output: `refused`, `proposedSteps`, `risks`, `outOfScope`, `doNotDo`
+- [x] Copy JSON for agent (manual paste into Cursor / CLI)
+- [x] Quality gates in prompt: plans must include lint, type check, and test steps
 
-Small upgrades that stay in this repo and support the **owner / manager / idea person** story (one ticket per message, feature work vs live bugs) without requiring Redis, CI agents, or multi-tenant billing.
+**Loop 0 complete when:** you can describe a change, get a plan that references real files in this repo, and hand it to a coding agent.
 
-- [x] **Intent on each message**: `kind: "feature" | "bug" | "other"` (schema + UI selector + LLM user message via `buildFeedbackUserMessage`).
-- [x] **Lightweight context for “I’m using the app”**: `contextWhere`, `contextPage`, `contextSteps` on the doc, optional UI block, passed into the model.
-- [x] **Human title**: optional `title` on create + `PATCH /api/feedback/:id` to edit; scannable list row.
-- [x] **README examples**: copy-paste feature vs bug prompts in README.
-- [x] **Health check**: `GET /api/health` and `GET /api/health?mongo=1`.
-- [x] **Friendlier startup**: feedback/process routes return **503** + `{ missing }` when required env is absent (`lib/env.ts`).
-- [x] **Operator UX**: collapsible “Raw / copy for agent” with full JSON payload + **Copy JSON** (includes `aiOutput` and `aiRaw`).
-- [x] **Re-run semantics**: **Re-analyze (overwrites)** on `done` / `error` / `pending`; prior `aiOutput` cleared when re-running from `done`.
-- [x] **Tiny test slice**: Vitest tests for `safeParseLlmFeedbackJson`, `rateLimit`, `buildFeedbackUserMessage` (`npm test`).
-- [x] **Compose ergonomics**: `Makefile` + `npm run docker:*` + README.
+## Loop 1 — Review and approve in the app
 
-## Phase 1 — Hardening
+Stop copy-pasting. The plan stays in the app, you edit it there, and accepting it triggers the next step.
 
-- [ ] MongoDB adapter (or DB-backed sessions) if you need revocation / multi-device audit
-- [ ] Stricter rate limiting (Redis or edge) and request logging without PII/secret leakage
-- [ ] E2E test: sign-in mock + API ingest + process (mock OpenAI)
-- [ ] `vinext deploy` + Wrangler: document `AUTH_URL`, secrets, and Mongo reachable from Workers (or tunnel / Atlas allowlist)
+- [ ] **Plan review UI**: show each `proposedStep` as an editable checklist in the feedback modal
+- [ ] **Accept / edit / reject**: `PATCH /api/feedback/:id` with `{ action: "accept", editedSteps }`. Store `approvedPlan` on the doc
+- [ ] **Re-plan**: if you reject or edit heavily, re-run the LLM with your edits as constraints
+- [ ] **Status flow**: `pending` → `planned` → `approved` → `applying` → `applied` (or `rejected`)
 
-## Phase 2 — GitHub / agent execution (out of POC)
+## Loop 2 — The app writes its own code
 
-- [ ] Create GitHub Issues from feedback (App or PAT with least privilege)
-- [ ] Sandboxed job runner (CI or worker) that applies patches from structured `aiOutput` / human-approved plans
-- [ ] Branch + PR flow; block merges without review for production repos
-- [ ] Prompt/versioning and “human gate” for destructive operations
+Accepted plans become file changes. You see diffs before anything lands.
 
-## Phase 3 — Product wrapper
+- [ ] **Code-gen prompt**: second LLM call takes `approvedPlan` + relevant source files and returns patches/diffs per file
+- [ ] **Diff preview UI**: render proposed changes in the modal (file name, before/after)
+- [ ] **Apply**: `POST /api/feedback/:id/apply` writes patches to the working tree (git worktree or direct fs)
+- [ ] **Verify after apply**: auto-run `npm run lint`, `npx tsc --noEmit`, `npm run test` and report pass/fail back to the UI
+- [ ] **Rollback**: `POST /api/feedback/:id/rollback` reverts applied changes (git revert or stash restore)
 
-- [ ] Multi-tenant “no-code” shell: per-user apps, keys, and feedback namespaces
-- [ ] Per-user BYOK: UI to choose `LLM_PROVIDER`, model id, and store an encrypted API key; thread into `analyzeFeedbackText` (same Zod output contract)
+## Loop 3 — Trust escalation
+
+Not everything needs a human click. Let safe changes flow, gate risky ones.
+
+- [ ] **Risk classification**: tag each step as low/medium/high risk based on what it touches (tests/docs = low, schema/auth/env = high)
+- [ ] **Auto-apply low-risk**: user toggles "auto-apply safe changes" — tests, docs, CSS go straight through
+- [ ] **Human gate for high-risk**: schema migrations, auth changes, env var additions always require explicit approval
+- [ ] **Audit log**: every apply/rollback/auto-apply recorded with timestamp, user, and diff hash
+
+## Loop 4 — Git and CI integration
+
+Changes that pass local verification get pushed, reviewed, and deployed.
+
+- [ ] **Branch + PR**: each accepted feedback creates a branch, applies changes, opens a PR
+- [ ] **CI verification**: PR triggers CI (lint + types + tests); status reported back to the feedback UI
+- [ ] **GitHub Issues**: optionally create an Issue from the original feedback, linked to the PR
+- [ ] **Merge flow**: auto-merge if CI passes and risk is low; require review for high-risk
+- [ ] **Status webhooks**: feedback UI updates when PR opens, CI passes, merge completes
+
+## Loop 5 — Product wrapper
+
+The same loop, available to other people building other apps.
+
+- [ ] Multi-tenant: per-user apps, keys, and feedback namespaces
+- [ ] Per-user BYOK: choose provider + model, store encrypted API key, thread into the same analysis pipeline
 - [ ] Billing, quotas, and abuse monitoring
+- [ ] Target repo config: point the app at any git repo (not just itself)
+
+## Hardening (ongoing, not a phase)
+
+These happen whenever they're needed, not in sequence.
+
+- [ ] MongoDB adapter for sessions (revocation / multi-device)
+- [ ] Stricter rate limiting (Redis or edge)
+- [ ] E2E tests: sign-in mock + API ingest + process (mock LLM)
+- [ ] `vinext deploy` + Wrangler docs
+- [ ] Request logging without PII/secret leakage
