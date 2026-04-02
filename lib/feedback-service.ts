@@ -1,8 +1,12 @@
 import { buildFeedbackUserMessage } from "@/lib/feedback-content";
 import { connectDb } from "@/lib/db";
-import { analyzeFeedbackText } from "@/lib/llm";
+import { analyzeFeedbackText, generateCode, type CodegenResult } from "@/lib/llm";
+import { resolveLlmConfigForUser } from "@/lib/env";
 import { Feedback, type FeedbackKind } from "@/models/Feedback";
 import mongoose from "mongoose";
+import { writeFile, mkdir, unlink } from "fs/promises";
+import { dirname, resolve } from "path";
+import { execSync } from "child_process";
 
 function docKind(doc: { kind?: string }): FeedbackKind {
   if (doc.kind === "feature" || doc.kind === "bug" || doc.kind === "other") {
@@ -65,7 +69,7 @@ export async function updateFeedbackTitle(feedbackId: string, userId: string, ti
   return { ok: true as const, doc };
 }
 
-export async function runFeedbackProcessing(feedbackId: string) {
+export async function runFeedbackProcessing(feedbackId: string, userId?: string) {
   await connectDb();
   if (!mongoose.isValidObjectId(feedbackId)) {
     return { ok: false as const, error: "Invalid id" };
@@ -74,6 +78,11 @@ export async function runFeedbackProcessing(feedbackId: string) {
   if (!doc) return { ok: false as const, error: "Not found" };
   if (doc.status === "processing") {
     return { ok: false as const, error: "Already processing" };
+  }
+
+  const llmResult = await resolveLlmConfigForUser(userId);
+  if (!llmResult.config) {
+    return { ok: false as const, error: llmResult.reason };
   }
 
   const wasDone = doc.status === "done";
@@ -94,7 +103,7 @@ export async function runFeedbackProcessing(feedbackId: string) {
       contextPage: doc.contextPage || undefined,
       contextSteps: doc.contextSteps || undefined,
     });
-    const { parsed, raw } = await analyzeFeedbackText(userMessage);
+    const { parsed, raw } = await analyzeFeedbackText(userMessage, llmResult.config);
     doc.aiOutput = {
       refused: parsed.refused,
       summary: parsed.summary,
@@ -113,5 +122,151 @@ export async function runFeedbackProcessing(feedbackId: string) {
     doc.errorMessage = message;
     await doc.save();
     return { ok: true as const, doc, reanalyzed: wasDone };
+  }
+}
+
+export async function acceptFeedbackPlan(
+  feedbackId: string,
+  userId: string,
+  editedSteps?: string[],
+) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findById(feedbackId);
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.userId !== userId) return { ok: false as const, error: "Forbidden" };
+  if (!doc.aiOutput?.proposedSteps?.length) {
+    return { ok: false as const, error: "No plan to accept — run analysis first" };
+  }
+
+  doc.approvedPlan = editedSteps ?? doc.aiOutput.proposedSteps;
+  doc.status = "approved";
+  doc.errorMessage = undefined;
+  await doc.save();
+  return { ok: true as const, doc };
+}
+
+export async function rejectFeedbackPlan(feedbackId: string, userId: string) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findById(feedbackId);
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.userId !== userId) return { ok: false as const, error: "Forbidden" };
+
+  doc.approvedPlan = undefined;
+  doc.codeOutput = undefined;
+  doc.status = "done";
+  await doc.save();
+  return { ok: true as const, doc };
+}
+
+export async function runCodeGeneration(feedbackId: string, userId?: string) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findById(feedbackId);
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.status !== "approved" || !doc.approvedPlan?.length) {
+    return { ok: false as const, error: "Plan must be approved before code generation" };
+  }
+
+  const llmResult = await resolveLlmConfigForUser(userId);
+  if (!llmResult.config) {
+    return { ok: false as const, error: llmResult.reason };
+  }
+
+  doc.status = "applying";
+  doc.errorMessage = undefined;
+  await doc.save();
+
+  try {
+    const feedbackText = buildFeedbackUserMessage({
+      kind: docKind(doc),
+      title: doc.title || undefined,
+      text: doc.text,
+    });
+    const { parsed, raw } = await generateCode(doc.approvedPlan, feedbackText, llmResult.config);
+    doc.codeOutput = raw;
+    doc.status = "approved";
+    await doc.save();
+    return { ok: true as const, doc, files: parsed.files };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Unknown error";
+    doc.status = "error";
+    doc.errorMessage = message;
+    await doc.save();
+    return { ok: false as const, error: message };
+  }
+}
+
+export async function applyCodeOutput(feedbackId: string, userId: string) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findById(feedbackId);
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.userId !== userId) return { ok: false as const, error: "Forbidden" };
+  if (!doc.codeOutput) {
+    return { ok: false as const, error: "No code output to apply — run code generation first" };
+  }
+
+  let files: CodegenResult["files"];
+  try {
+    const parsed = JSON.parse(doc.codeOutput) as { files?: CodegenResult["files"] };
+    files = parsed.files ?? [];
+  } catch {
+    return { ok: false as const, error: "Could not parse stored code output" };
+  }
+
+  const projectRoot = resolve(".");
+  const applied: string[] = [];
+
+  try {
+    for (const file of files) {
+      const target = resolve(projectRoot, file.path);
+      if (!target.startsWith(projectRoot)) {
+        throw new Error(`Path traversal blocked: ${file.path}`);
+      }
+      if (file.action === "delete") {
+        await unlink(target).catch(() => {});
+        applied.push(`deleted ${file.path}`);
+      } else {
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, file.content, "utf-8");
+        applied.push(`${file.action === "create" ? "created" : "edited"} ${file.path}`);
+      }
+    }
+
+    doc.status = "applied";
+    doc.appliedAt = new Date();
+    doc.applyResult = applied.join("\n");
+    doc.errorMessage = undefined;
+    await doc.save();
+    return { ok: true as const, doc, applied };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Unknown error";
+    doc.status = "error";
+    doc.errorMessage = message;
+    await doc.save();
+    return { ok: false as const, error: message };
+  }
+}
+
+export function runVerification(): { ok: boolean; output: string } {
+  try {
+    const output = execSync(
+      "npm run lint 2>&1 && npx tsc --noEmit 2>&1 && npm run test 2>&1",
+      { encoding: "utf-8", timeout: 60_000, cwd: resolve(".") },
+    );
+    return { ok: true, output };
+  } catch (e) {
+    const output = (e as { stdout?: string; stderr?: string }).stdout ?? "";
+    return { ok: false, output };
   }
 }

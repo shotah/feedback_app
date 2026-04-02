@@ -1,6 +1,8 @@
-# TODO — feedback_app
+# TODO — CYOA
 
 > **This app builds itself.** You describe what you want, the AI plans it against the actual codebase, you review and approve, and the app applies the change. Every feature below should be submitted as feedback *to this app* and implemented through the same loop it provides. The plane is flying; we're building it in the air.
+>
+> **EXPERIMENTAL** — this app writes files to its own working tree. Use at your own risk. If it breaks something, `git checkout .` or `git stash` will get you back. That's the rollback plan for now, and that's fine.
 
 ## Loop 0 — Bootstrap (done)
 
@@ -15,26 +17,22 @@ The minimum to close the first feedback loop manually: sign in, describe what yo
 - [x] Copy JSON for agent (manual paste into Cursor / CLI)
 - [x] Quality gates in prompt: plans must include lint, type check, and test steps
 
-**Loop 0 complete when:** you can describe a change, get a plan that references real files in this repo, and hand it to a coding agent.
-
-## Loop 1 — Review and approve in the app
+## Loop 1 — Review and approve in the app (done)
 
 Stop copy-pasting. The plan stays in the app, you edit it there, and accepting it triggers the next step.
 
-- [ ] **Plan review UI**: show each `proposedStep` as an editable checklist in the feedback modal
-- [ ] **Accept / edit / reject**: `PATCH /api/feedback/:id` with `{ action: "accept", editedSteps }`. Store `approvedPlan` on the doc
-- [ ] **Re-plan**: if you reject or edit heavily, re-run the LLM with your edits as constraints
-- [ ] **Status flow**: `pending` → `planned` → `approved` → `applying` → `applied` (or `rejected`)
+- [x] **Plan review UI**: show each `proposedStep` as an editable checklist in the feedback modal
+- [x] **Accept / edit / reject**: `PATCH /api/feedback/:id` with `{ action: "accept", editedSteps }`. Store `approvedPlan` on the doc
+- [x] **Status flow**: `pending` → `processing` → `done` → `approved` → `applying` → `applied` (or `error` / back to `done` on reject)
 
-## Loop 2 — The app writes its own code
+## Loop 2 — The app writes its own code (done)
 
-Accepted plans become file changes. You see diffs before anything lands.
+Accepted plans become file changes. You see results after apply.
 
-- [ ] **Code-gen prompt**: second LLM call takes `approvedPlan` + relevant source files and returns patches/diffs per file
-- [ ] **Diff preview UI**: render proposed changes in the modal (file name, before/after)
-- [ ] **Apply**: `POST /api/feedback/:id/apply` writes patches to the working tree (git worktree or direct fs)
-- [ ] **Verify after apply**: auto-run `npm run lint`, `npx tsc --noEmit`, `npm run test` and report pass/fail back to the UI
-- [ ] **Rollback**: `POST /api/feedback/:id/rollback` reverts applied changes (git revert or stash restore)
+- [x] **Code-gen prompt**: second LLM call (`CODEGEN_SYSTEM` in `lib/prompts.ts`) takes `approvedPlan` + original feedback and returns file patches as JSON (`{ files: [{ path, action, content }] }`)
+- [x] **Apply**: `POST /api/feedback/:id/apply` runs code generation, writes patches to the working tree, and reports what was created/edited/deleted
+- [x] **Verify after apply**: auto-runs `npm run lint`, `npx tsc --noEmit`, `npm run test` and reports pass/fail in the response
+- [x] **Path traversal protection**: apply rejects paths that escape the project root
 
 ## Loop 3 — Trust escalation
 
@@ -43,7 +41,7 @@ Not everything needs a human click. Let safe changes flow, gate risky ones.
 - [ ] **Risk classification**: tag each step as low/medium/high risk based on what it touches (tests/docs = low, schema/auth/env = high)
 - [ ] **Auto-apply low-risk**: user toggles "auto-apply safe changes" — tests, docs, CSS go straight through
 - [ ] **Human gate for high-risk**: schema migrations, auth changes, env var additions always require explicit approval
-- [ ] **Audit log**: every apply/rollback/auto-apply recorded with timestamp, user, and diff hash
+- [ ] **Diff preview UI**: show proposed file changes (before/after) in the modal before applying
 
 ## Loop 4 — Git and CI integration
 

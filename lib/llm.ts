@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
-import { resolveLlmApiKey, resolveLlmModel, resolveLlmProvider } from "@/lib/env";
-import { FEEDBACK_ANALYSIS_SYSTEM } from "@/lib/prompts";
+import type { ResolvedLlmConfig } from "@/lib/env";
+import { FEEDBACK_ANALYSIS_SYSTEM, CODEGEN_SYSTEM } from "@/lib/prompts";
 
 export const FeedbackAiJsonSchema = z.object({
   refused: z.boolean(),
@@ -87,24 +87,74 @@ async function callAnthropic(
   return validateParsedJson(json, raw);
 }
 
-export async function analyzeFeedbackText(feedbackText: string): Promise<{
+export async function analyzeFeedbackText(
+  feedbackText: string,
+  llmConfig: ResolvedLlmConfig,
+): Promise<{
   parsed: FeedbackAiResult;
   raw: string;
 }> {
-  const provider = resolveLlmProvider();
-  if (!provider) {
-    throw new Error(
-      `Unsupported LLM_PROVIDER "${process.env.LLM_PROVIDER ?? ""}". Use "openai" or "anthropic".`,
-    );
-  }
-  const apiKey = resolveLlmApiKey();
-  if (!apiKey) {
-    throw new Error("LLM_API_KEY is not set");
-  }
-  const model = resolveLlmModel(provider);
-
+  const { provider, apiKey, model } = llmConfig;
   if (provider === "openai") {
     return callOpenAI(apiKey, model, feedbackText);
   }
   return callAnthropic(apiKey, model, feedbackText);
+}
+
+export const CodegenFileSchema = z.object({
+  path: z.string(),
+  action: z.enum(["create", "edit", "delete"]),
+  content: z.string(),
+});
+
+export const CodegenResultSchema = z.object({
+  files: z.array(CodegenFileSchema),
+});
+
+export type CodegenResult = z.infer<typeof CodegenResultSchema>;
+
+export async function generateCode(
+  approvedSteps: string[],
+  originalFeedback: string,
+  llmConfig: ResolvedLlmConfig,
+): Promise<{ parsed: CodegenResult; raw: string }> {
+  const { provider, apiKey, model } = llmConfig;
+  const userMsg = `Original feedback:\n${originalFeedback}\n\nApproved implementation plan:\n${approvedSteps.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+  const jsonSuffix = "\n\nRespond with a single JSON object only (no markdown code fences, no prose).";
+
+  let raw: string;
+  if (provider === "openai") {
+    const client = new OpenAI({ apiKey });
+    const completion = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: CODEGEN_SYSTEM },
+        { role: "user", content: userMsg },
+      ],
+      response_format: { type: "json_object" },
+    });
+    raw = completion.choices[0]?.message?.content ?? "{}";
+  } else {
+    const client = new Anthropic({ apiKey });
+    const msg = await client.messages.create({
+      model,
+      max_tokens: 16384,
+      system: `${CODEGEN_SYSTEM}${jsonSuffix}`,
+      messages: [{ role: "user", content: userMsg }],
+    });
+    const textBlocks = msg.content.filter((b) => b.type === "text");
+    raw = textBlocks.map((b) => b.text).join("") || "{}";
+  }
+
+  let json: unknown;
+  try {
+    json = parseModelJson(raw);
+  } catch {
+    throw new Error("LLM returned non-JSON for code generation");
+  }
+  const parsed = CodegenResultSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error("Code generation output did not match expected shape");
+  }
+  return { parsed: parsed.data, raw };
 }

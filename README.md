@@ -1,4 +1,4 @@
-# feedback_app
+# CYOA
 
 Proof-of-concept: **Google and GitHub sign-in** (Auth.js), **MongoDB** for JSON-friendly feedback records, and a **server-side LLM** step with safety-biased prompting. The app targets **[vinext](https://github.com/cloudflare/vinext)** (Next.js API on Vite) so you can later deploy to **Cloudflare Workers** with `vinext deploy`.
 
@@ -90,7 +90,7 @@ Copy [.env.example](.env.example) to `.env` and fill in values.
 | `LLM_MODEL` | Optional; if unset, defaults to `gpt-4o-mini` (OpenAI) or `claude-3-5-haiku-20241022` (Anthropic) |
 | `FEEDBACK_INGEST_API_KEY` | Optional Bearer token for programmatic `POST /api/feedback` |
 
-Secrets and provider choice are **server-side only** (bring-your-own-key for the deployment). **`LLM_PROVIDER` is still required** because OpenAI and Anthropic use different request shapes and SDKs; **`LLM_API_KEY`** and **`LLM_MODEL`** are the generic knobs you can reuse when you later let each user paste their own key and model id. A future step is to persist those per user (encrypted) and pass them into the same resolver pattern.
+Secrets are **server-side only**. **Settings** (in the app) can store an **encrypted LLM API key** and optional **GitHub PAT + default `owner/repo` + base branch** per signed-in user (same `AUTH_SECRET`-derived encryption as the LLM key). Env vars remain the fallback for LLM when no user key exists.
 
 Only route handlers call the LLM and MongoDB.
 
@@ -167,6 +167,25 @@ npm run docker:logs   # docker compose logs -f web
 Equivalent: `make up`, `make down`, `make logs` if you use the included `Makefile`.
 
 **Tooling:** `npm run deps:update` runs [npm-check-updates](https://github.com/raineorshine/npm-check-updates). React is **19.x** with caret ranges; core app deps were already on latest npm versions at upgrade time. ESLint stays on **v9** because **eslint-config-next** 16.2.x’s bundled React plugin is not compatible with ESLint 10 yet.
+
+## GitHub Actions
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and PRs to `main` / `master`: **lint**, **TypeScript**, **Vitest**, and **`npm run build`** (vinext). Use this as the **required status** for branch protection and (optionally) **auto-merge** when all checks pass.
+
+## Deploying to Cloudflare (vinext)
+
+This app targets **[vinext](https://github.com/cloudflare/vinext)** so it can run on **Cloudflare Workers** with the Next.js App Router surface.
+
+1. Install and log in: **`npm i -g wrangler`** (or use `npx`) and run **`wrangler login`**.
+2. From the repo root, follow the current **[vinext deployment guide](https://vinext.io/)** (e.g. **`vinext deploy`** when your project is wired for Workers). Vinext may generate or expect Worker config alongside your build; check the version you have pinned in `package.json`.
+3. Set **secrets / vars** in the Cloudflare dashboard (or via `wrangler secret put`): at minimum **`AUTH_SECRET`**, **`AUTH_URL`**, OAuth client IDs/secrets, **`MONGODB_URI`**, and any server LLM vars if you are not relying only on per-user keys. **MongoDB** must be reachable from Workers (e.g. **MongoDB Atlas**); long-lived TCP patterns may need **Hyperdrive** or a compatible data layer as vinext/Workers constraints evolve.
+4. **Heavy automation** (full `git clone`, large codegen, or long CPU) often does **not** belong on the same Worker as the HTTP app. Practical split: CYOA does **planning + API** on the edge, and **PR creation** runs in **GitHub Actions** (workflow_dispatch or `repository_dispatch`) or a **small Node service** with a normal filesystem, triggered by webhook or queue. Add **Cloudflare Queues** + a consumer only if you need durable background work with backpressure.
+
+## Integration ideas (PRs and bots)
+
+- **GitHub Copilot / other agents:** CYOA can stay the **human + LLM planning** layer; automation can open issues or PRs via the GitHub API using the **PAT stored in Settings** (once wired), or using a **repo-level `GITHUB_TOKEN`** in Actions for org-owned flows.
+- **Anthropic “issue resolver” style flows:** One lightweight pattern is: CYOA **writes the approved plan + context into a GitHub Issue** (body or comment), then an external **issue-driven resolver** (Claude or another product) picks up that issue. You avoid duplicating resolver logic inside CYOA; your job is a **stable issue format** and labels.
+- **Extra Workers:** Only add more Workers (or Durable Objects) when you have a concrete need: **webhooks**, **scheduled sweeps**, or **queue consumers**. Otherwise **GitHub Actions** is simpler for git + CI-shaped work.
 
 ## Security notes (POC)
 

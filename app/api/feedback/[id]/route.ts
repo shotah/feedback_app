@@ -1,11 +1,19 @@
 import { auth } from "@/auth";
-import { getFeedbackById, updateFeedbackTitle } from "@/lib/feedback-service";
+import {
+  getFeedbackById,
+  updateFeedbackTitle,
+  acceptFeedbackPlan,
+  rejectFeedbackPlan,
+} from "@/lib/feedback-service";
 import { missingForFeedbackStorage } from "@/lib/env";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-const patchBodySchema = z.object({
-  title: z.string().max(200),
+const titleBodySchema = z.object({ title: z.string().max(200) });
+
+const actionBodySchema = z.object({
+  action: z.enum(["accept", "reject"]),
+  editedSteps: z.array(z.string()).optional(),
 });
 
 export async function PATCH(
@@ -14,7 +22,7 @@ export async function PATCH(
 ) {
   const mis = missingForFeedbackStorage();
   if (mis.length) {
-    return NextResponse.json({ error: "Server misconfiguration", missing: mis }, { status: 503 });
+    return NextResponse.json({ error: "Missing env vars", missing: mis }, { status: 503 });
   }
 
   const session = await auth();
@@ -37,12 +45,30 @@ export async function PATCH(
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const parsed = patchBodySchema.safeParse(json);
-  if (!parsed.success) {
+
+  const actionParsed = actionBodySchema.safeParse(json);
+  if (actionParsed.success) {
+    const { action, editedSteps } = actionParsed.data;
+    if (action === "accept") {
+      const result = await acceptFeedbackPlan(id, session.user.id, editedSteps);
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      return NextResponse.json({ id: result.doc.id, status: result.doc.status });
+    }
+    const result = await rejectFeedbackPlan(id, session.user.id);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ id: result.doc.id, status: result.doc.status });
+  }
+
+  const titleParsed = titleBodySchema.safeParse(json);
+  if (!titleParsed.success) {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  const result = await updateFeedbackTitle(id, session.user.id, parsed.data.title);
+  const result = await updateFeedbackTitle(id, session.user.id, titleParsed.data.title);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 404 });
   }

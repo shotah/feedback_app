@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import { getFeedbackById, runFeedbackProcessing } from "@/lib/feedback-service";
-import { missingForLlmProcess } from "@/lib/env";
+import { missingForFeedbackStorage } from "@/lib/env";
 import { rateLimit } from "@/lib/rate-limit";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -41,9 +41,9 @@ export async function POST(
     return NextResponse.json({ error: gate.message }, { status: gate.status });
   }
 
-  const mis = missingForLlmProcess();
+  const mis = missingForFeedbackStorage();
   if (mis.length) {
-    return NextResponse.json({ error: "Server misconfiguration", missing: mis }, { status: 503 });
+    return NextResponse.json({ error: "Missing env vars", missing: mis }, { status: 503 });
   }
 
   const session = await auth();
@@ -57,7 +57,7 @@ export async function POST(
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
 
-  const result = await runFeedbackProcessing(id);
+  const result = await runFeedbackProcessing(id, session?.user?.id);
   if (!result.ok) {
     const status = result.error === "Not found" ? 404 : 400;
     return NextResponse.json({ error: result.error }, { status });

@@ -1,4 +1,4 @@
-import { missingForLlmProcess, resolveLlmApiKey, resolveLlmModel, resolveLlmProvider } from "@/lib/env";
+import { missingForLlmProcess, missingForFeedbackStorage, resolveLlmApiKey, resolveLlmModel, resolveLlmProvider } from "@/lib/env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("resolveLlmProvider", () => {
@@ -55,18 +55,29 @@ describe("missingForLlmProcess", () => {
     vi.unstubAllEnvs();
   });
 
-  it("requires LLM_API_KEY", () => {
+  it("only checks MONGODB_URI (LLM keys are per-user now)", () => {
     vi.stubEnv("MONGODB_URI", "mongodb://x");
-    vi.stubEnv("LLM_PROVIDER", "openai");
-    vi.stubEnv("LLM_API_KEY", "");
-    delete process.env.LLM_API_KEY;
-    expect(missingForLlmProcess()).toContain("LLM_API_KEY");
+    expect(missingForLlmProcess()).toEqual([]);
   });
 
-  it("passes when LLM_API_KEY set", () => {
+  it("reports missing MONGODB_URI", () => {
+    delete process.env.MONGODB_URI;
+    expect(missingForLlmProcess()).toContain("MONGODB_URI");
+  });
+});
+
+describe("missingForFeedbackStorage", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reports missing MONGODB_URI", () => {
+    delete process.env.MONGODB_URI;
+    expect(missingForFeedbackStorage()).toContain("MONGODB_URI");
+  });
+
+  it("passes when MONGODB_URI set", () => {
     vi.stubEnv("MONGODB_URI", "mongodb://x");
-    vi.stubEnv("LLM_PROVIDER", "openai");
-    vi.stubEnv("LLM_API_KEY", "x");
-    expect(missingForLlmProcess()).toEqual([]);
+    expect(missingForFeedbackStorage()).toEqual([]);
   });
 });

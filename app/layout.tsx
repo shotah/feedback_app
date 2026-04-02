@@ -3,8 +3,8 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Feedback app",
-  description: "POC: Google auth, MongoDB, and LLM feedback loop (vinext)",
+  title: "CYOA",
+  description: "Prototype · Auth.js, MongoDB, LLM-assisted feedback (vinext)",
 };
 
 export default function RootLayout({

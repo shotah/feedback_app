@@ -27,7 +27,7 @@ function clientKey(req: NextRequest): string {
 export async function GET() {
   const mis = missingForFeedbackStorage();
   if (mis.length) {
-    return NextResponse.json({ error: "Server misconfiguration", missing: mis }, { status: 503 });
+    return NextResponse.json({ error: "Missing env vars", missing: mis }, { status: 503 });
   }
   const session = await auth();
   if (!session?.user?.id) {
@@ -40,7 +40,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const mis = missingForFeedbackStorage();
   if (mis.length) {
-    return NextResponse.json({ error: "Server misconfiguration", missing: mis }, { status: 503 });
+    return NextResponse.json({ error: "Missing env vars", missing: mis }, { status: 503 });
   }
 
   const ingestKey = process.env.FEEDBACK_INGEST_API_KEY;

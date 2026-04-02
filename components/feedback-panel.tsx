@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+function apiError(body: unknown, fallback: string): string {
+  const b = body as { error?: string; missing?: string[] } | null;
+  if (!b?.error) return fallback;
+  if (b.missing?.length) return `${b.error}: ${b.missing.join(", ")}`;
+  return b.error;
+}
+
 type AiOutput = {
   refused?: boolean;
   summary?: string;
@@ -24,6 +31,10 @@ export type FeedbackItem = {
   createdAt?: string;
   aiOutput?: AiOutput;
   aiRaw?: string;
+  approvedPlan?: string[];
+  codeOutput?: string;
+  applyResult?: string;
+  appliedAt?: string;
   errorMessage?: string;
 };
 
@@ -68,8 +79,7 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
         }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? "Submit failed");
+        throw new Error(apiError(await res.json().catch(() => null), "Submit failed"));
       }
       const { id } = (await res.json()) as { id: string };
       setTitle("");
@@ -80,8 +90,7 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
       setContextSteps("");
       const proc = await fetch(`/api/feedback/${id}/process`, { method: "POST" });
       if (!proc.ok) {
-        const body = await proc.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? "Processing failed");
+        throw new Error(apiError(await proc.json().catch(() => null), "Processing failed"));
       }
       await refresh();
     } catch (e) {
@@ -90,26 +99,6 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
       setBusy(false);
     }
   }, [text, title, kind, contextWhere, contextPage, contextSteps, refresh]);
-
-  const reprocess = useCallback(
-    async (id: string) => {
-      setError(null);
-      setBusy(true);
-      try {
-        const proc = await fetch(`/api/feedback/${id}/process`, { method: "POST" });
-        if (!proc.ok) {
-          const body = await proc.json().catch(() => ({}));
-          throw new Error((body as { error?: string }).error ?? "Processing failed");
-        }
-        await refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Something went wrong");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [refresh],
-  );
 
   return (
     <div className="feedback">
@@ -257,29 +246,180 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
                     <AiList title="Do not do (agent guardrails)" items={item.aiOutput.doNotDo} />
                   </div>
                 ) : null}
+                <PlanActions
+                  item={item}
+                  busy={busy}
+                  onAction={async (action) => {
+                    setError(null);
+                    setBusy(true);
+                    try {
+                      if (action.type === "reprocess") {
+                        const proc = await fetch(`/api/feedback/${item._id}/process`, { method: "POST" });
+                        if (!proc.ok) {
+                          throw new Error(apiError(await proc.json().catch(() => null), "Processing failed"));
+                        }
+                      } else if (action.type === "accept") {
+                        const res = await fetch(`/api/feedback/${item._id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: "accept", editedSteps: action.steps }),
+                        });
+                        if (!res.ok) {
+                          throw new Error(apiError(await res.json().catch(() => null), "Accept failed"));
+                        }
+                      } else if (action.type === "reject") {
+                        const res = await fetch(`/api/feedback/${item._id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: "reject" }),
+                        });
+                        if (!res.ok) throw new Error("Reject failed");
+                      } else if (action.type === "apply") {
+                        const res = await fetch(`/api/feedback/${item._id}/apply`, { method: "POST" });
+                        if (!res.ok) {
+                          throw new Error(apiError(await res.json().catch(() => null), "Apply failed"));
+                        }
+                        const data = await res.json() as { verification?: { passed: boolean; output: string } };
+                        if (data.verification && !data.verification.passed) {
+                          setError(`Applied but verification failed:\n${data.verification.output.slice(0, 500)}`);
+                        }
+                      }
+                      await refresh();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Something went wrong");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
                 <OperatorBlock item={item} />
-                {item.status !== "processing" ? (
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    disabled={busy}
-                    onClick={() => reprocess(item._id)}
-                  >
-                    {item.status === "pending"
-                      ? "Run analysis"
-                      : item.status === "done"
-                        ? "Re-analyze (overwrites)"
-                        : "Retry analysis"}
-                  </button>
-                ) : (
-                  <p className="muted small">Analyzing…</p>
-                )}
               </li>
             ))}
           </ul>
         )}
       </section>
     </div>
+  );
+}
+
+type PlanAction =
+  | { type: "reprocess" }
+  | { type: "accept"; steps: string[] }
+  | { type: "reject" }
+  | { type: "apply" };
+
+function PlanActions({
+  item,
+  busy,
+  onAction,
+}: {
+  item: FeedbackItem;
+  busy: boolean;
+  onAction: (action: PlanAction) => Promise<void>;
+}) {
+  const steps = item.aiOutput?.proposedSteps ?? [];
+  const [editableSteps, setEditableSteps] = useState<string[]>(steps);
+  const [editing, setEditing] = useState(false);
+
+  if (item.status === "processing" || item.status === "applying") {
+    return <p className="muted small">Working...</p>;
+  }
+
+  if (item.status === "applied") {
+    return (
+      <div className="plan-actions">
+        <p className="muted small">Applied {item.appliedAt ? new Date(item.appliedAt).toLocaleString() : ""}</p>
+        {item.applyResult ? (
+          <pre className="raw-pre">{item.applyResult}</pre>
+        ) : null}
+        <button type="button" className="btn ghost" disabled={busy} onClick={() => onAction({ type: "reprocess" })}>
+          Start over (re-analyze)
+        </button>
+      </div>
+    );
+  }
+
+  if (item.status === "approved" && item.approvedPlan?.length) {
+    return (
+      <div className="plan-actions">
+        <p className="muted small">Plan approved — ready to generate code and apply.</p>
+        <div className="row">
+          <button type="button" className="btn primary" disabled={busy} onClick={() => onAction({ type: "apply" })}>
+            Generate code and apply
+          </button>
+          <button type="button" className="btn ghost" disabled={busy} onClick={() => onAction({ type: "reject" })}>
+            Reject plan
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if ((item.status === "done" || item.status === "error") && steps.length > 0 && !item.aiOutput?.refused) {
+    return (
+      <div className="plan-actions">
+        {editing ? (
+          <div className="editable-steps">
+            <p className="muted small">Edit, reorder, or remove steps before accepting:</p>
+            {editableSteps.map((step, i) => (
+              <div key={i} className="step-row">
+                <span className="step-num">{i + 1}.</span>
+                <input
+                  className="input step-input"
+                  value={step}
+                  onChange={(e) => {
+                    const next = [...editableSteps];
+                    next[i] = e.target.value;
+                    setEditableSteps(next);
+                  }}
+                  disabled={busy}
+                />
+                <button
+                  type="button"
+                  className="btn ghost"
+                  disabled={busy}
+                  onClick={() => setEditableSteps(editableSteps.filter((_, j) => j !== i))}
+                  title="Remove step"
+                >
+                  x
+                </button>
+              </div>
+            ))}
+            <div className="row">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={busy || editableSteps.filter((s) => s.trim()).length === 0}
+                onClick={() => onAction({ type: "accept", steps: editableSteps.filter((s) => s.trim()) })}
+              >
+                Accept plan
+              </button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="row">
+            <button type="button" className="btn primary" disabled={busy} onClick={() => onAction({ type: "accept", steps })}>
+              Accept plan
+            </button>
+            <button type="button" className="btn ghost" disabled={busy} onClick={() => { setEditableSteps(steps); setEditing(true); }}>
+              Edit plan
+            </button>
+            <button type="button" className="btn ghost" disabled={busy} onClick={() => onAction({ type: "reprocess" })}>
+              Re-analyze
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <button type="button" className="btn ghost" disabled={busy} onClick={() => onAction({ type: "reprocess" })}>
+      {item.status === "pending" ? "Run analysis" : "Re-analyze"}
+    </button>
   );
 }
 

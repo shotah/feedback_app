@@ -23,13 +23,16 @@ export function FeedbackModal() {
 
   return (
     <>
-      <button
-        type="button"
-        className="btn primary"
-        onClick={() => setOpen(true)}
-      >
-        Open feedback
-      </button>
+      <div className="feedback-fab">
+        <button
+          type="button"
+          className="btn primary feedback-fab-btn"
+          onClick={() => setOpen(true)}
+          aria-label="Open feedback"
+        >
+          Feedback
+        </button>
+      </div>
 
       {open ? (
         <div className="modal-backdrop" onClick={close}>
