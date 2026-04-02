@@ -119,8 +119,11 @@ Use **one ticket per message**. Tweak titles and context to match your product.
 |--------|------|--------|
 | `GET` | `/api/health` | Liveness; add `?mongo=1` to ping MongoDB |
 | `POST` | `/api/feedback` | Session cookie or Bearer ingest key; JSON body see UI network tab |
-| `PATCH` | `/api/feedback/:id` | Session only; body `{ "title": "..." }` (max 200 chars) |
+| `PATCH` | `/api/feedback/:id` | Session; `{ "title" }` only (strict) updates title; full body `{ "text", optional context… }` updates a **pending** draft only |
+| `DELETE` | `/api/feedback/:id` | Session; **pending** drafts only |
 | `POST` | `/api/feedback/:id/process` | Run or re-run LLM; overwrites prior analysis on success |
+| `POST` | `/api/feedback/:id/github-issue` | Session; requires **approved** plan + GitHub PAT + default `owner/repo` in Settings; creates an issue with the plan |
+| `POST` | `/api/feedback/:id/apply` | Session; codegen + write files on server + lint/tsc/test (experimental) |
 
 ## Run with Docker Compose
 

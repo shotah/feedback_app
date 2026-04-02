@@ -36,6 +36,8 @@ export type FeedbackItem = {
   applyResult?: string;
   appliedAt?: string;
   errorMessage?: string;
+  githubIssueUrl?: string;
+  githubIssueNumber?: number;
 };
 
 export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }) {
@@ -212,27 +214,33 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
                     {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}
                   </span>
                 </div>
-                <TitleRow item={item} disabled={busy} onSaved={refresh} />
-                {item.contextWhere || item.contextPage || item.contextSteps ? (
-                  <div className="context-block muted small">
-                    {item.contextWhere ? (
-                      <p>
-                        <strong>Where:</strong> {item.contextWhere}
-                      </p>
+                {item.status === "pending" ? (
+                  <PendingFeedbackEditor item={item} disabled={busy} onSaved={refresh} />
+                ) : (
+                  <>
+                    <TitleRow item={item} disabled={busy} onSaved={refresh} />
+                    {item.contextWhere || item.contextPage || item.contextSteps ? (
+                      <div className="context-block muted small">
+                        {item.contextWhere ? (
+                          <p>
+                            <strong>Where:</strong> {item.contextWhere}
+                          </p>
+                        ) : null}
+                        {item.contextPage ? (
+                          <p>
+                            <strong>Page:</strong> {item.contextPage}
+                          </p>
+                        ) : null}
+                        {item.contextSteps ? (
+                          <p>
+                            <strong>Steps:</strong> {item.contextSteps}
+                          </p>
+                        ) : null}
+                      </div>
                     ) : null}
-                    {item.contextPage ? (
-                      <p>
-                        <strong>Page:</strong> {item.contextPage}
-                      </p>
-                    ) : null}
-                    {item.contextSteps ? (
-                      <p>
-                        <strong>Steps:</strong> {item.contextSteps}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-                <p className="feedback-text">{item.text}</p>
+                    <p className="feedback-text">{item.text}</p>
+                  </>
+                )}
                 {item.errorMessage ? <p className="error">{item.errorMessage}</p> : null}
                 {item.aiOutput ? (
                   <div className="ai">
@@ -283,6 +291,21 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
                         if (data.verification && !data.verification.passed) {
                           setError(`Applied but verification failed:\n${data.verification.output.slice(0, 500)}`);
                         }
+                      } else if (action.type === "githubIssue") {
+                        const res = await fetch(`/api/feedback/${item._id}/github-issue`, {
+                          method: "POST",
+                        });
+                        const data = (await res.json().catch(() => null)) as {
+                          error?: string;
+                          existingUrl?: string;
+                        } | null;
+                        if (res.status === 409 && data?.existingUrl) {
+                          await refresh();
+                          return;
+                        }
+                        if (!res.ok) {
+                          throw new Error(apiError(data, "Could not create GitHub issue"));
+                        }
                       }
                       await refresh();
                     } catch (e) {
@@ -306,7 +329,8 @@ type PlanAction =
   | { type: "reprocess" }
   | { type: "accept"; steps: string[] }
   | { type: "reject" }
-  | { type: "apply" };
+  | { type: "apply" }
+  | { type: "githubIssue" };
 
 function PlanActions({
   item,
@@ -329,6 +353,14 @@ function PlanActions({
     return (
       <div className="plan-actions">
         <p className="muted small">Applied {item.appliedAt ? new Date(item.appliedAt).toLocaleString() : ""}</p>
+        {item.githubIssueUrl ? (
+          <p className="muted small">
+            GitHub issue:{" "}
+            <a href={item.githubIssueUrl} target="_blank" rel="noopener noreferrer">
+              #{item.githubIssueNumber ?? "—"}
+            </a>
+          </p>
+        ) : null}
         {item.applyResult ? (
           <pre className="raw-pre">{item.applyResult}</pre>
         ) : null}
@@ -342,11 +374,29 @@ function PlanActions({
   if (item.status === "approved" && item.approvedPlan?.length) {
     return (
       <div className="plan-actions">
-        <p className="muted small">Plan approved — ready to generate code and apply.</p>
+        <p className="muted small">Plan approved — generate code here, or push the plan to GitHub as an issue.</p>
+        {item.githubIssueUrl ? (
+          <p className="muted small" style={{ marginBottom: "0.5rem" }}>
+            GitHub issue:{" "}
+            <a href={item.githubIssueUrl} target="_blank" rel="noopener noreferrer">
+              #{item.githubIssueNumber ?? "—"}
+            </a>
+          </p>
+        ) : null}
         <div className="row">
           <button type="button" className="btn primary" disabled={busy} onClick={() => onAction({ type: "apply" })}>
             Generate code and apply
           </button>
+          {!item.githubIssueUrl ? (
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={busy}
+              onClick={() => onAction({ type: "githubIssue" })}
+            >
+              Create GitHub issue
+            </button>
+          ) : null}
           <button type="button" className="btn ghost" disabled={busy} onClick={() => onAction({ type: "reject" })}>
             Reject plan
           </button>
@@ -420,6 +470,183 @@ function PlanActions({
     <button type="button" className="btn ghost" disabled={busy} onClick={() => onAction({ type: "reprocess" })}>
       {item.status === "pending" ? "Run analysis" : "Re-analyze"}
     </button>
+  );
+}
+
+function PendingFeedbackEditor({
+  item,
+  disabled,
+  onSaved,
+}: {
+  item: FeedbackItem;
+  disabled: boolean;
+  onSaved: () => Promise<void>;
+}) {
+  const [title, setTitle] = useState(item.title ?? "");
+  const [kind, setKind] = useState<"feature" | "bug" | "other">(item.kind ?? "other");
+  const [text, setText] = useState(item.text);
+  const [contextWhere, setContextWhere] = useState(item.contextWhere ?? "");
+  const [contextPage, setContextPage] = useState(item.contextPage ?? "");
+  const [contextSteps, setContextSteps] = useState(item.contextSteps ?? "");
+  const [saving, setSaving] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTitle(item.title ?? "");
+    setKind(item.kind ?? "other");
+    setText(item.text);
+    setContextWhere(item.contextWhere ?? "");
+    setContextPage(item.contextPage ?? "");
+    setContextSteps(item.contextSteps ?? "");
+    setLocalError(null);
+  }, [
+    item._id,
+    item.title,
+    item.kind,
+    item.text,
+    item.contextWhere,
+    item.contextPage,
+    item.contextSteps,
+  ]);
+
+  const save = useCallback(async () => {
+    setLocalError(null);
+    if (!text.trim()) {
+      setLocalError("Feedback text is required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/feedback/${item._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: text.trim(),
+          title: title.trim() || undefined,
+          kind,
+          contextWhere: contextWhere.trim() || undefined,
+          contextPage: contextPage.trim() || undefined,
+          contextSteps: contextSteps.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(apiError(await res.json().catch(() => null), "Could not save"));
+      }
+      await onSaved();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }, [item._id, text, title, kind, contextWhere, contextPage, contextSteps, onSaved]);
+
+  const remove = useCallback(async () => {
+    if (!window.confirm("Delete this draft? This cannot be undone.")) return;
+    setLocalError(null);
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/feedback/${item._id}`, { method: "DELETE" });
+      if (!res.ok) {
+        throw new Error(apiError(await res.json().catch(() => null), "Could not delete"));
+      }
+      await onSaved();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setSaving(false);
+    }
+  }, [item._id, onSaved]);
+
+  return (
+    <div className="pending-editor">
+      <p className="muted small" style={{ marginBottom: "0.65rem" }}>
+        Pending — edit or delete before you run analysis.
+      </p>
+      <div className="field">
+        <label htmlFor={`pf-title-${item._id}`}>Title (optional)</label>
+        <input
+          id={`pf-title-${item._id}`}
+          className="input"
+          maxLength={200}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          disabled={disabled || saving}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`pf-kind-${item._id}`}>Kind</label>
+        <select
+          id={`pf-kind-${item._id}`}
+          className="select"
+          value={kind}
+          onChange={(e) => setKind(e.target.value as "feature" | "bug" | "other")}
+          disabled={disabled || saving}
+        >
+          <option value="feature">Feature / change</option>
+          <option value="bug">Bug / broken behavior</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor={`pf-text-${item._id}`}>Feedback</label>
+        <textarea
+          id={`pf-text-${item._id}`}
+          className="textarea"
+          rows={5}
+          maxLength={8000}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={disabled || saving}
+        />
+        <span className="muted small">{text.length}/8000</span>
+      </div>
+      <details className="details">
+        <summary>Context (optional)</summary>
+        <div className="field">
+          <label htmlFor={`pf-where-${item._id}`}>Where / environment</label>
+          <input
+            id={`pf-where-${item._id}`}
+            className="input"
+            maxLength={2000}
+            value={contextWhere}
+            onChange={(e) => setContextWhere(e.target.value)}
+            disabled={disabled || saving}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`pf-page-${item._id}`}>Screen or page</label>
+          <input
+            id={`pf-page-${item._id}`}
+            className="input"
+            maxLength={500}
+            value={contextPage}
+            onChange={(e) => setContextPage(e.target.value)}
+            disabled={disabled || saving}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`pf-steps-${item._id}`}>Steps to reproduce</label>
+          <textarea
+            id={`pf-steps-${item._id}`}
+            className="textarea"
+            rows={3}
+            maxLength={4000}
+            value={contextSteps}
+            onChange={(e) => setContextSteps(e.target.value)}
+            disabled={disabled || saving}
+          />
+        </div>
+      </details>
+      {localError ? <p className="error">{localError}</p> : null}
+      <div className="row">
+        <button type="button" className="btn primary" disabled={disabled || saving || !text.trim()} onClick={save}>
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+        <button type="button" className="btn ghost" disabled={disabled || saving} onClick={remove}>
+          Delete draft
+        </button>
+      </div>
+    </div>
   );
 }
 

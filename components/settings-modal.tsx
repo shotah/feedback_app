@@ -175,8 +175,9 @@ export function SettingsModal() {
 
                 <h3 className="settings-section-title">GitHub</h3>
                 <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                  For upcoming automation: open PRs, post to issues, or call the GitHub API using your token.
-                  Scopes: <code className="inline-code">repo</code> (private repos) or fine-grained access to the target repo.
+                  After you <strong>approve a plan</strong>, you can <strong>Create GitHub issue</strong> on the ticket to
+                  post the plan to your default repo. Use a classic PAT with <code className="inline-code">repo</code> or
+                  a fine-grained token with <strong>Issues: write</strong> on that repository.
                 </p>
 
                 <div className="field">
@@ -225,6 +226,43 @@ export function SettingsModal() {
                     autoComplete="off"
                   />
                 </div>
+
+                <h3 className="settings-section-title">Plan → code (FAQ)</h3>
+                <p className="muted small settings-faq-intro">
+                  CYOA turns feedback into an approved plan first. Getting that plan into real code can happen in more than one way.
+                </p>
+
+                <details className="details settings-faq-item">
+                  <summary>What does “Generate code and apply” do in this app?</summary>
+                  <p className="muted small">
+                    After you approve the plan, that flow asks the LLM for a JSON list of files, then{" "}
+                    <strong>writes those files on the machine running the API</strong> (your laptop in dev, or your
+                    deploy). It does <strong>not</strong> clone GitHub or open a PR by itself. The model only sees your
+                    feedback and plan text plus generic project hints—not your full repo unless we add that later.
+                  </p>
+                </details>
+
+                <details className="details settings-faq-item">
+                  <summary>Can I use GitHub instead (issues, PRs, bots)?</summary>
+                  <p className="muted small">
+                    Yes. A practical pattern is: copy the <strong>approved plan</strong> (and ticket context) into a{" "}
+                    <strong>GitHub Issue</strong>, then let your normal toolchain handle implementation—humans, Copilot,
+                    or <strong>vendor GitHub integrations</strong> (for example Anthropic’s Claude features for GitHub,
+                    if your org has enabled them). Turn those on in{" "}
+                    <strong>GitHub → Settings → Integrations / installed GitHub Apps</strong> and follow the vendor’s
+                    docs; CYOA does not flip those switches for you.
+                  </p>
+                </details>
+
+                <details className="details settings-faq-item">
+                  <summary>Why save a PAT and default repo here?</summary>
+                  <p className="muted small">
+                    With those set, an <strong>approved</strong> ticket can use <strong>Create GitHub issue</strong> to
+                    open an issue in <code className="inline-code">owner/repo</code> with your plan and original feedback.
+                    For PRs and CI, many teams still use <strong>GitHub Actions</strong> with{" "}
+                    <code className="inline-code">GITHUB_TOKEN</code> and <strong>auto-merge</strong> when checks pass.
+                  </p>
+                </details>
 
                 <div className="row">
                   <button type="button" className="btn primary" disabled={saving} onClick={save}>

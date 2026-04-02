@@ -42,6 +42,8 @@ const FeedbackSchema = new Schema(
     applyResult: { type: String },
     appliedAt: { type: Date },
     errorMessage: { type: String },
+    githubIssueUrl: { type: String },
+    githubIssueNumber: { type: Number },
     source: { type: String, enum: ["ui", "api"], required: true },
   },
   { timestamps: true },

@@ -1,7 +1,8 @@
 import { buildFeedbackUserMessage } from "@/lib/feedback-content";
 import { connectDb } from "@/lib/db";
 import { analyzeFeedbackText, generateCode, type CodegenResult } from "@/lib/llm";
-import { resolveLlmConfigForUser } from "@/lib/env";
+import { resolveGithubConfigForUser, resolveLlmConfigForUser } from "@/lib/env";
+import { createGithubIssue, formatApprovedPlanIssueBody, parseOwnerRepo } from "@/lib/github-issue";
 import { Feedback, type FeedbackKind } from "@/models/Feedback";
 import mongoose from "mongoose";
 import { writeFile, mkdir, unlink } from "fs/promises";
@@ -67,6 +68,54 @@ export async function updateFeedbackTitle(feedbackId: string, userId: string, ti
   ).exec();
   if (!doc) return { ok: false as const, error: "Not found" };
   return { ok: true as const, doc };
+}
+
+export async function updatePendingFeedback(
+  feedbackId: string,
+  userId: string,
+  input: {
+    text: string;
+    title?: string;
+    kind?: FeedbackKind;
+    contextWhere?: string;
+    contextPage?: string;
+    contextSteps?: string;
+  },
+) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findOne({ _id: feedbackId, userId }).exec();
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.status !== "pending") {
+    return { ok: false as const, error: "Only pending feedback can be edited" };
+  }
+
+  doc.text = input.text.trim().slice(0, 8000);
+  doc.title = (input.title ?? "").trim().slice(0, 200);
+  if (input.kind === "feature" || input.kind === "bug" || input.kind === "other") {
+    doc.kind = input.kind;
+  }
+  doc.contextWhere = input.contextWhere?.trim() || undefined;
+  doc.contextPage = input.contextPage?.trim() || undefined;
+  doc.contextSteps = input.contextSteps?.trim() || undefined;
+  await doc.save();
+  return { ok: true as const, doc };
+}
+
+export async function deletePendingFeedback(feedbackId: string, userId: string) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findOne({ _id: feedbackId, userId }).exec();
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.status !== "pending") {
+    return { ok: false as const, error: "Only pending feedback can be deleted" };
+  }
+  await Feedback.deleteOne({ _id: feedbackId, userId }).exec();
+  return { ok: true as const };
 }
 
 export async function runFeedbackProcessing(feedbackId: string, userId?: string) {
@@ -162,6 +211,84 @@ export async function rejectFeedbackPlan(feedbackId: string, userId: string) {
   doc.status = "done";
   await doc.save();
   return { ok: true as const, doc };
+}
+
+export async function createGithubIssueForFeedback(feedbackId: string, userId: string) {
+  await connectDb();
+  if (!mongoose.isValidObjectId(feedbackId)) {
+    return { ok: false as const, error: "Invalid id" };
+  }
+  const doc = await Feedback.findById(feedbackId);
+  if (!doc) return { ok: false as const, error: "Not found" };
+  if (doc.userId !== userId) return { ok: false as const, error: "Forbidden" };
+  if (doc.status !== "approved" || !doc.approvedPlan?.length) {
+    return {
+      ok: false as const,
+      error: "Approve a plan first. GitHub issues are created only while the ticket is in the approved state.",
+    };
+  }
+  if (doc.githubIssueUrl) {
+    return {
+      ok: false as const,
+      error: "A GitHub issue was already created for this ticket.",
+      existingUrl: doc.githubIssueUrl,
+    };
+  }
+
+  const gh = await resolveGithubConfigForUser(userId);
+  if (!gh.config) {
+    return { ok: false as const, error: gh.reason };
+  }
+
+  const parts = parseOwnerRepo(gh.config.defaultRepo);
+  if (!parts) {
+    return {
+      ok: false as const,
+      error: "Set a valid default repository (owner/repo) in Settings.",
+    };
+  }
+
+  const rawTitle =
+    doc.title?.trim() ||
+    (doc.text.trim().slice(0, 72) + (doc.text.trim().length > 72 ? "…" : "")) ||
+    `Feedback ${feedbackId}`;
+  const issueTitle = rawTitle.toLowerCase().startsWith("cyoa:")
+    ? rawTitle.slice(0, 256)
+    : `CYOA: ${rawTitle}`.slice(0, 256);
+
+  const body = formatApprovedPlanIssueBody({
+    feedbackId: String(doc._id),
+    title: doc.title ?? "",
+    kind: doc.kind ?? "other",
+    text: doc.text,
+    contextWhere: doc.contextWhere ?? undefined,
+    contextPage: doc.contextPage ?? undefined,
+    contextSteps: doc.contextSteps ?? undefined,
+    approvedPlan: doc.approvedPlan,
+    summary: doc.aiOutput?.summary,
+  });
+
+  const result = await createGithubIssue({
+    token: gh.config.pat,
+    owner: parts.owner,
+    repo: parts.repo,
+    title: issueTitle,
+    body,
+  });
+
+  if ("error" in result) {
+    const hint =
+      result.status === 401 || result.status === 403
+        ? " Check the PAT in Settings (issues: write, and access to this repo)."
+        : "";
+    return { ok: false as const, error: `${result.error}${hint}` };
+  }
+
+  doc.githubIssueUrl = result.html_url;
+  doc.githubIssueNumber = result.number;
+  await doc.save();
+
+  return { ok: true as const, url: result.html_url, number: result.number };
 }
 
 export async function runCodeGeneration(feedbackId: string, userId?: string) {

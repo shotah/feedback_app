@@ -372,6 +372,18 @@ h1 {
   color: var(--accent);
 }
 
+.settings-faq-intro {
+  margin: 0 0 0.65rem;
+}
+
+.settings-faq-item {
+  margin-top: 0.5rem;
+}
+
+.settings-faq-item .muted.small {
+  margin: 0.5rem 0 0;
+}
+
 .feedback-header-btn {
   font-weight: 600;
 }
