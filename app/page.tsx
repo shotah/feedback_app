@@ -1,6 +1,5 @@
 import { SignInButtons } from "@/components/sign-in-buttons";
 import { auth } from "@/auth";
-import Link from "next/link";
 
 export default async function Home() {
   const session = await auth();
@@ -19,9 +18,9 @@ export default async function Home() {
             <p className="muted">
               Signed in as <strong>{session.user.email ?? session.user.name ?? session.user.id}</strong>
             </p>
-            <Link className="btn primary" href="/feedback">
+            <a className="btn primary" href="/feedback">
               Open feedback
-            </Link>
+            </a>
           </div>
         ) : (
           <SignInButtons />

@@ -1,11 +1,11 @@
-"use client";
-
-import { signOut } from "next-auth/react";
-
+/**
+ * Plain anchor to /api/logout — must be <a>, not <Link> (same CORS
+ * reason as sign-in: the 302 crosses origins in the fetch path).
+ */
 export function SignOutButton() {
   return (
-    <button type="button" className="btn ghost" onClick={() => signOut({ callbackUrl: "/" })}>
+    <a href="/api/logout" className="btn ghost">
       Sign out
-    </button>
+    </a>
   );
 }

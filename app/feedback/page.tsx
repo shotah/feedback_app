@@ -2,7 +2,6 @@ import { FeedbackPanel, type FeedbackItem } from "@/components/feedback-panel";
 import { SignOutButton } from "@/components/sign-out-button";
 import { listFeedbackForUser } from "@/lib/feedback-service";
 import { auth } from "@/auth";
-import Link from "next/link";
 
 export default async function FeedbackPage() {
   const session = await auth();
@@ -15,7 +14,8 @@ export default async function FeedbackPage() {
   return (
     <div className="page">
       <header className="topbar">
-        <Link href="/">Home</Link>
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+        <a href="/">Home</a>
         <SignOutButton />
       </header>
       <main className="shell wide">

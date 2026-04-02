@@ -15,12 +15,9 @@ export async function GET(
 ) {
   const { provider } = await params;
   const origin = process.env.AUTH_URL ?? new URL(req.url).origin;
-  const signInUrl = `${origin}/api/auth/signin/${provider}`;
-
-  console.log(`[login] provider=${provider} origin=${origin} signInUrl=${signInUrl}`);
 
   const signInReq = new Request(
-    signInUrl,
+    `${origin}/api/auth/signin/${provider}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -28,24 +25,6 @@ export async function GET(
     },
   );
 
-  const secretStr = String(authConfig.secret ?? process.env.AUTH_SECRET ?? "");
-  console.log(`[login] secret (first 8): "${secretStr.slice(0, 8)}…" len=${secretStr.length}`);
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const res = await Auth(signInReq, { ...(authConfig as any), skipCSRFCheck });
-
-  console.log(`[login] Auth response: status=${res.status}`);
-  console.log(`[login]   Location: ${res.headers.get("Location")?.slice(0, 100)}`);
-
-  const setCookies = res.headers.getSetCookie?.() ?? [];
-  console.log(`[login]   Set-Cookie count: ${setCookies.length}`);
-  for (const c of setCookies) {
-    const eqIdx = c.indexOf("=");
-    const name = c.slice(0, eqIdx);
-    const rest = c.slice(eqIdx + 1);
-    const value = rest.split(";")[0];
-    console.log(`[login]   SET ${name} valueLen=${value.length} first40=${value.slice(0, 40)}`);
-  }
-
-  return res;
+  return Auth(signInReq, { ...(authConfig as any), skipCSRFCheck });
 }

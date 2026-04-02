@@ -1,4 +1,6 @@
-import mongoose, { Schema, model, models } from "mongoose";
+import mongoose from "mongoose";
+
+const { Schema, model, models } = mongoose;
 
 export const FEEDBACK_KINDS = ["feature", "bug", "other"] as const;
 export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];
