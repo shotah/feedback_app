@@ -39,11 +39,17 @@ export function FeedbackPanel({ initialItems }: { initialItems: FeedbackItem[] }
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/feedback");
-    if (!res.ok) throw new Error("Failed to load feedback");
-    const data = (await res.json()) as { items: FeedbackItem[] };
-    setItems(data.items);
+    try {
+      const res = await fetch("/api/feedback");
+      if (!res.ok) return;
+      const data = (await res.json()) as { items: FeedbackItem[] };
+      setItems(data.items);
+    } catch { /* auth or network errors are non-fatal here */ }
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const submit = useCallback(async () => {
     setError(null);
